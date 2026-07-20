@@ -1,0 +1,9 @@
+# 构建产物
+remlink-client
+remlink-client.exe
+*.syso
+bin/
+
+# 生成的 Windows 资源（由 make syso / build 自动生成）
+build/windows/icon.ico
+build/windows/info.json
