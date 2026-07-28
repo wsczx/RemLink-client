@@ -71,6 +71,12 @@ func tlsChannel(conn *tls.Conn, bufR *bufio.Reader, cSess *session.ConnSession, 
 			case <-cSess.CloseChan:
 				return
 			}
+		case 0x05: // DISCONNECT：服务端主动断开（踢人/停机/会话回收）
+			base.Warn("tls receive DISCONNECT, server closed the session")
+			session.Sess.ServerClose = true
+			return // defer 里 cSess.Close() 会触发 CloseChan，上层据 ServerClose 判定不盲目重连
+		case 0x07: // KEEPALIVE
+			base.Debug("tls receive KEEPALIVE")
 		}
 		cSess.Stat.BytesReceived += uint64(bytesReceived)
 	}

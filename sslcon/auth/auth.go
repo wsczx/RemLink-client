@@ -61,7 +61,7 @@ type Profile struct {
 	// SsoToken：SSO 完成后由客户端本地回调（localhost:29786）捕获并填充，
 	//   提交 auth-reply 时作为 <sso-token> 发回 handleSsoToken 换取 session-token。
 	SsoV2Login string
-	SsoToken    string
+	SsoToken   string
 }
 
 const (
@@ -90,19 +90,29 @@ func init() {
 	// log.Printf("%+v %+v", info, os)
 }
 
-// InitAuth 确定用户组和服务端认证地址 AuthPath
-func InitAuth() error {
-	WebVpnCookie = ""
-	// https://github.com/mwitkow/go-http-dialer
+// Dial 建立（或重建）与网关的 TLS 连接。
+// 自动重连时单独调用：复用已有 session-token 直接重建隧道，无需重新认证。
+// 使用 "tcp" 而非 "tcp4"：支持 IPv6-only / 双栈网络接入。
+func Dial() error {
 	config := tls.Config{
 		InsecureSkipVerify: base.Cfg.InsecureSkipVerify,
 	}
 	var err error
-	Conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 6 * time.Second}, "tcp4", Prof.HostWithPort, &config)
+	Conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 6 * time.Second}, "tcp", Prof.HostWithPort, &config)
 	if err != nil {
 		return err
 	}
 	BufR = bufio.NewReader(Conn)
+	return nil
+}
+
+// InitAuth 确定用户组和服务端认证地址 AuthPath
+func InitAuth() error {
+	WebVpnCookie = ""
+	// https://github.com/mwitkow/go-http-dialer
+	if err := Dial(); err != nil {
+		return err
+	}
 	// base.Info(Conn.ConnectionState().Version)
 
 	dtd := new(proto.DTD)
@@ -110,7 +120,7 @@ func InitAuth() error {
 	Prof.AppVersion = base.Cfg.AgentVersion
 	Prof.MacAddress = base.LocalInterface.Mac
 
-	err = tplPost(tplInit, "", dtd)
+	err := tplPost(tplInit, "", dtd)
 	if err != nil {
 		return err
 	}
@@ -124,8 +134,10 @@ func InitAuth() error {
 	Prof.SsoV2Login = dtd.Auth.SsoV2Login
 
 	gps := len(dtd.Auth.Form.Groups)
-	if gps != 0 && !utils.InArray(dtd.Auth.Form.Groups, Prof.Group) {
-		return fmt.Errorf("available user groups are: %s", strings.Join(dtd.Auth.Form.Groups, " "))
+	if gps != 0 && Prof.Group == "" {
+		// SSO/WebAuth 客户端：组由 WebAuth 登录页选择，服务端经 SSO 令牌确定组，
+		// 客户端不在 InitAuth 阶段预选或报错，避免阻塞进入 WebAuth。
+		base.Info("服务端可选组: " + strings.Join(dtd.Auth.Form.Groups, " ") + "（由 WebAuth 选择）")
 	}
 
 	return nil

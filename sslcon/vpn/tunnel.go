@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
-	"strings"
 
 	"sslcon/auth"
 	"sslcon/base"
@@ -20,7 +20,10 @@ var (
 )
 
 func init() {
-	reqHeaders["X-CSTP-VPNAddress-Type"] = "IPv4"
+	// 双栈能力声明（与 AnyConnect 一致）：服务端配置 Ipv6CIDR 时会分配 v6 地址，
+	// 通过 X-CSTP-Address-IP6 / X-CSTP-DNS-IP6 / X-CSTP-Split-*-IP6 下发
+	reqHeaders["X-CSTP-Address-Type"] = "IPv6,IPv4"
+	reqHeaders["X-CSTP-Full-IPv6-Capability"] = "true"
 	// Payload + 8 + 加密扩展位 + TCP或UDP头 + IP头 最好小于 1500，这里参考 AnyConnect 设置
 	reqHeaders["X-CSTP-MTU"] = "1399"
 	reqHeaders["X-CSTP-Base-MTU"] = "1399"
@@ -32,7 +35,9 @@ func init() {
 func initTunnel() {
 	// https://datatracker.ietf.org/doc/html/draft-mavrogiannopoulos-openconnect-03#section-2.1.3
 	reqHeaders["Cookie"] = "webvpn=" + session.Sess.SessionToken // 无论什么服务端都需要通过 Cookie 发送 Session
-	reqHeaders["X-CSTP-Local-VPNAddress-IP4"] = base.LocalInterface.Ip4
+	// 注意：服务端读取的是 X-CSTP-Local-Address-IP4（RemLink/anylink/ocserv 同名），
+	// 旧值 X-CSTP-Local-VPNAddress-IP4 是错误拼写，服务端永远取不到
+	reqHeaders["X-CSTP-Local-Address-IP4"] = base.LocalInterface.Ip4
 
 	// Legacy Establishment of Secondary UDP Channel https://datatracker.ietf.org/doc/html/draft-mavrogiannopoulos-openconnect-02#section-2.1.5.1
 	// worker-vpn.c WSPCONFIG(ws)->udp_port != 0 && req->master_secret_set != 0 否则 disabling UDP (DTLS) connection
@@ -91,7 +96,12 @@ func SetupTunnel() error {
 	}
 
 	cSess := session.Sess.NewConnSession(&resp.Header)
-	cSess.ServerAddress = strings.Split(auth.Conn.RemoteAddr().String(), ":")[0]
+	// 用 SplitHostPort 而非 Split(":")：服务器经 IPv6 连入时地址形如 [2001:db8::1]:443
+	if host, _, err := net.SplitHostPort(auth.Conn.RemoteAddr().String()); err == nil {
+		cSess.ServerAddress = host
+	} else {
+		cSess.ServerAddress = auth.Conn.RemoteAddr().String()
+	}
 	cSess.Hostname = auth.Prof.Host
 	cSess.TLSCipherSuite = tls.CipherSuiteName(auth.Conn.ConnectionState().CipherSuite)
 

@@ -1,6 +1,6 @@
 //go:build windows && arm64
 
-package main
+package wintundll
 
 import _ "embed"
 

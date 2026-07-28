@@ -1,101 +1,14 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RemLink</title>
-  <link rel="icon" href="/logo.svg" />
-  <link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-  <!-- 无边框窗口控件：顶部拖拽条 + 最小化 / 关闭（收进托盘） -->
-  <div class="titlebar">
-    <div class="tb-controls">
-      <button id="minBtn" class="tb-btn" title="最小化" aria-label="最小化">–</button>
-      <button id="hideBtn" class="tb-btn tb-close" title="关闭" aria-label="关闭">×</button>
-    </div>
-  </div>
-
-  <div class="bg-decor">
-    <span class="orb orb-1"></span>
-    <span class="orb orb-2"></span>
-    <span class="orb orb-3"></span>
-  </div>
-
-  <main class="shell">
-    <header class="brand">
-      <svg class="brand-logo" viewBox="0 0 64 64" role="img" aria-label="RemLink">
-        <rect x="2" y="2" width="60" height="60" rx="14" fill="#0EA5E9"/>
-        <path d="M14 40 L30 24 L38 32" fill="none" stroke="#F0F9FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M30 24 L50 24 L42 34" fill="none" stroke="#F0F9FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="14" cy="40" r="5" fill="#BAE6FD"/>
-        <circle cx="50" cy="24" r="5" fill="#BAE6FD"/>
-        <circle cx="30" cy="24" r="4" fill="#F0F9FF"/>
-      </svg>
-      <h1 class="brand-name" id="brandName">RemLink</h1>
-      <p class="brand-tagline" id="brandTagline">企业级安全远程接入</p>
-    </header>
-
-    <!-- 连接视图：仅服务器地址（凭据/组/OTP/SSO 均在 WebAuth 页完成） -->
-    <section class="card" id="connectView">
-      <label class="field-label" for="server">服务器地址</label>
-      <div class="input-wrap">
-        <span class="input-icon">🔒</span>
-        <input id="server" class="input" type="text" autocomplete="off" spellcheck="false"
-               list="savedServers" placeholder="vpn.example.com 或 https://vpn.example.com" />
-        <datalist id="savedServers"></datalist>
-      </div>
-      <p class="hint">输入 RemLink 网关地址，点击「连接」后将在安全窗口中完成 WebAuth 身份认证。</p>
-      <button id="connectBtn" class="btn-primary">
-        <span class="btn-label">连接</span>
-      </button>
-      <p id="error" class="error" hidden></p>
-    </section>
-
-    <!-- 连接详情视图：隧道建立后展示 -->
-    <section class="card details" id="detailsView" hidden>
-      <div class="conn-hero">
-        <div class="conn-ring"><span class="status-dot on"></span></div>
-        <div class="conn-meta">
-          <div class="conn-title">已安全连接</div>
-          <div class="conn-host" id="server2">—</div>
-        </div>
-      </div>
-
-      <div class="conn-grid">
-        <div class="conn-item">
-          <span class="ci-label">分配地址</span>
-          <span class="ci-val" id="ipv4">—</span>
-        </div>
-        <div class="conn-item">
-          <span class="ci-label">DNS</span>
-          <span class="ci-val" id="dns">—</span>
-        </div>
-        <div class="conn-item">
-          <span class="ci-label">MTU</span>
-          <span class="ci-val" id="mtu">—</span>
-        </div>
-        <div class="conn-item">
-          <span class="ci-label">已连接</span>
-          <span class="ci-val mono" id="duration">00:00:00</span>
-        </div>
-      </div>
-
-      <button id="portalBtn" class="btn-primary">进入门户</button>
-      <button id="disconnectBtn" class="btn-ghost danger">断开连接</button>
-    </section>
-
-    <footer class="foot">
-      <span id="version">RemLink Client</span>
-      <span class="dot">·</span>
-      <span>安全连接，自由访问</span>
-    </footer>
-  </main>
-
-  <!-- Wails 运行时：建立 window.wails（含 Call.ByName）。必须是 module，否则无法执行 import。 -->
-  <script type="module" src="/wails/runtime.js"></script>
-  <!-- 绑定桥接：定义 window.go.services.ClientService（自包含，无需 wails 代码生成器）。 -->
-  <script type="module" src="/bindings.js"></script>
-  <script src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RemLink</title>
+    <link rel="icon" href="/logo.svg" />
+    <script type="module" crossorigin src="/assets/index-CAnpGG8v.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-E8_cyQ1E.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
 </html>

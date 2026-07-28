@@ -6,13 +6,17 @@ import (
 
 	"remlink-client/internal/app"
 	"remlink-client/internal/ui"
+	_ "remlink-client/wintun_dll" // Windows 下启动时把内嵌的 wintun.dll 释放到 exe 同目录
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 func main() {
 	svc := app.New()
+	notifier := notifications.New()
+	svc.SetNotifier(notifier)
 
 	app := application.New(application.Options{
 		Name:        "RemLink",
@@ -36,6 +40,7 @@ func main() {
 		},
 		Services: []application.Service{
 			application.NewService(svc),
+			application.NewService(notifier), // 系统通知（通知中心即时提醒）
 		},
 		Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false},
 	})
@@ -45,10 +50,10 @@ func main() {
 		BackgroundColour: application.NewRGB(27, 33, 56),
 		URL:              "/",
 		Frameless:        true,
-		Width:            420,
-		Height:           700,
-		MinWidth:         420,
-		MinHeight:        700,
+		Width:            960,
+		Height:           720,
+		MinWidth:         960,
+		MinHeight:        720,
 		// 固定窗口大小：不允许用户拖拽缩放。
 		DisableResize: true,
 		// 禁用 WebView 默认右键菜单（返回/前进/刷新/另存等）。

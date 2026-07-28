@@ -23,6 +23,7 @@ type Session struct {
 	PreMasterSecret []byte
 
 	ActiveClose bool
+	ServerClose bool          // 服务端经 CSTP 0x05 主动断开（会话已被服务端回收，勿盲目自动重连）
 	CloseChan   chan struct{} // 用于通知所有 UI，ConnSession 已关闭
 	CSess       *ConnSession
 }
@@ -43,10 +44,14 @@ type ConnSession struct {
 	TunName       string
 	VPNAddress    string // The IPv4 address of the client
 	VPNMask       string // IPv4 netmask
+	VPNAddress6   string // 服务端分配的 IPv6 地址（/128），空表示纯 v4
 	DNS           []string
+	DNS6          []string // IPv6 DNS（X-CSTP-DNS-IP6）
 	MTU           int
 	SplitInclude  []string
 	SplitExclude  []string
+	SplitInclude6 []string // IPv6 包含路由，CIDR 格式（X-CSTP-Split-Include-IP6）
+	SplitExclude6 []string // IPv6 排除路由，CIDR 格式（X-CSTP-Split-Exclude-IP6）
 
 	DynamicSplitTunneling       bool
 	DynamicSplitIncludeDomains  []string
@@ -105,6 +110,7 @@ func (sess *Session) NewConnSession(header *http.Header) *ConnSession {
 	sess.CSess = cSess
 
 	sess.ActiveClose = false
+	sess.ServerClose = false
 	sess.CloseChan = make(chan struct{})
 
 	cSess.VPNAddress = header.Get("X-CSTP-Address")
@@ -114,6 +120,13 @@ func (sess *Session) NewConnSession(header *http.Header) *ConnSession {
 	// 如果服务器下发空字符串，字符串数组不会为 nil，会导致解析ip时报错
 	cSess.SplitInclude = header.Values("X-CSTP-Split-Include")
 	cSess.SplitExclude = header.Values("X-CSTP-Split-Exclude")
+
+	// IPv6 双栈（AnyConnect 头族）：服务端仅在分配了 v6 地址时下发。
+	// Netmask-IP6 固定 128（/128 点对点），无需保存。
+	cSess.VPNAddress6 = header.Get("X-CSTP-Address-IP6")
+	cSess.DNS6 = header.Values("X-CSTP-DNS-IP6")
+	cSess.SplitInclude6 = header.Values("X-CSTP-Split-Include-IP6")
+	cSess.SplitExclude6 = header.Values("X-CSTP-Split-Exclude-IP6")
 	// debug with https://ip.900cha.com/
 	// cSess.SplitExclude = append(cSess.SplitExclude, "47.243.165.103/255.255.255.255")
 

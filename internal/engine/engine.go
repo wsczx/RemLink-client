@@ -39,6 +39,10 @@ type Engine interface {
 	Disconnect() error
 	// Events 返回引擎 → UI 的事件通道。
 	Events() <-chan types.Event
+	// Stats 返回当前隧道实时统计；未连接时返回 nil。
+	Stats() *types.TunnelStats
+	// RunDiagnostics 本地自助排障（网关可达性/DNS/MTU/路由概况），返回诊断键值。
+	RunDiagnostics() (map[string]any, error)
 }
 
 // emit 非阻塞发送事件，通道满时丢弃最新（避免阻塞引擎）。

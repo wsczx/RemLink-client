@@ -14,9 +14,14 @@ import (
 
 // AppConfig 是客户端持久化配置。
 type AppConfig struct {
-	Servers      []types.ServerEntry `json:"servers"`
-	LastServer   string              `json:"last_server"`
-	AutoReconnect bool               `json:"auto_reconnect"`
+	Servers       []types.ServerEntry `json:"servers"`
+	LastServer    string              `json:"last_server"`
+	AutoReconnect bool                `json:"auto_reconnect"`
+	// CachedEndpoints 是服务端经控制通道下发的接入点列表缓存（key=用户输入的
+	// 网关 base URL）。下次连接前对「用户地址+缓存接入点」并发测速择优。
+	CachedEndpoints map[string][]string `json:"cached_endpoints,omitempty"`
+	// Notices 通知中心最近条目（服务端消息/断开原因），跨启动保留。
+	Notices []types.Notice `json:"notices,omitempty"`
 }
 
 // Path 返回配置文件路径（跨平台用户配置目录）。

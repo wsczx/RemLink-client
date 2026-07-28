@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package wintundll
 
 import (
 	"os"
@@ -15,17 +15,22 @@ import (
 // 因此必须把 dll 放到 exe 旁边，否则建隧道时报
 //   "Error loading wintun.dll DLL: Unable to load library"。
 //
-// 若同目录已存在 wintun.dll 则跳过（避免重复写，也允许用户自带更新版本）。
+// 始终用内嵌版本覆盖同目录的旧 wintun.dll：曾经出现过「旧/损坏的 wintun.dll
+// 残留在 exe 目录，embed 的跳过逻辑导致坏 dll 一直被加载，CreateAdapter 报
+// 'The system cannot find the file specified'」的坑。客户端与内嵌 dll 版本强绑定，
+// 强制覆盖比「跳过」更稳定。
 func extractWintunDLL() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	dst := filepath.Join(filepath.Dir(exe), "wintun.dll")
-	if _, err := os.Stat(dst); err == nil {
-		return nil // 已存在，无需重复释放
+	// 先删旧的（忽略「不存在」错误），再写内嵌版本，避免残留坏文件。
+	_ = os.Remove(dst)
+	if err := os.WriteFile(dst, wintunDLL, 0644); err != nil {
+		return err
 	}
-	return os.WriteFile(dst, wintunDLL, 0644)
+	return nil
 }
 
 func init() {

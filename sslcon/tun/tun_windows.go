@@ -72,7 +72,15 @@ func CreateTUNWithRequestedGUID(ifname string, requestedGUID *windows.GUID, mtu 
 	wt, err := wintun.CreateAdapter(ifname, WintunTunnelType, requestedGUID)
 	// }
 	if err != nil {
-		return nil, fmt.Errorf("Error creating interface: %w", err)
+		// CreateAdapter 偶发失败（如并发创建、适配器其实已存在但首次调用因
+		// 内核态竞争返回错误）时，尝试按名打开复用已存在的适配器。
+		if old, oerr := wintun.OpenAdapter(ifname); oerr == nil && old != nil {
+			wt = old
+		} else {
+			// 常见根因是 wintun 内核驱动（C:\Windows\System32\drivers\wintun.sys）
+			// 损坏/未安装/版本不匹配，或不是管理员。给出可操作的排查提示。
+			return nil, fmt.Errorf("创建虚拟网卡失败(%w)。请排查：①右键以管理员身份运行；②设备管理器→查看→显示隐藏的设备→网络适配器，卸载灰色的 Wintun/TLSLink 适配器并勾选「删除此设备的驱动程序软件」；③删除 C:\\Windows\\System32\\drivers\\wintun.sys 后重连；④确认系统为 Windows 10 1809 及以上", err)
+		}
 	}
 
 	forcedMTU := 1420

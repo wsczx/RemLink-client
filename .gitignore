@@ -7,3 +7,8 @@ bin/
 # 生成的 Windows 资源（由 make syso / build 自动生成）
 build/windows/icon.ico
 build/windows/info.json
+
+# 前端依赖与构建产物（由 make frontend 生成）
+frontend/node_modules/
+internal/ui/assets/*
+!internal/ui/assets/.gitkeep

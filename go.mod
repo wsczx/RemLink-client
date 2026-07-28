@@ -3,14 +3,15 @@ module remlink-client
 go 1.26.2
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/tc-hib/winres v0.3.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.117
 	sslcon v0.0.0
 )
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/elastic/go-sysinfo v1.15.4 // indirect
 	github.com/elastic/go-windows v1.0.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

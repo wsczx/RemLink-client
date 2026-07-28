@@ -10,12 +10,16 @@ icon:
 syso: icon
 	bash scripts/build_syso.sh
 
+## 构建前端（Vite + Vue3 + Naive UI），产物落入 internal/ui/assets
+frontend:
+	cd frontend && npm install && npm run build
+
 ## 交叉编译 Windows amd64 发布包（含图标）
-build:
+build: frontend
 	bash scripts/build_windows.sh
 
 ## 本地 Linux 编译（开发用，.syso 自动忽略）
-build-linux:
+build-linux: frontend
 	GOWORK=off go build -buildvcs=false -o remlink-client .
 
 ## 清理构建产物

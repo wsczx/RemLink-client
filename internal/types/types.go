@@ -15,6 +15,7 @@ const (
 	StatusConnecting
 	StatusNeedAuth
 	StatusConnected
+	StatusReconnecting
 	StatusDisconnected
 	StatusError
 )
@@ -29,6 +30,8 @@ func (s ConnStatus) String() string {
 		return "need_auth"
 	case StatusConnected:
 		return "connected"
+	case StatusReconnecting:
+		return "reconnecting"
 	case StatusDisconnected:
 		return "disconnected"
 	case StatusError:
@@ -63,6 +66,47 @@ type TunnelInfo struct {
 	Server       string   `json:"server"`
 }
 
+// TunnelStats 连接期间的实时统计（UI 轮询用）。
+type TunnelStats struct {
+	RxBytes uint64 `json:"rx_bytes"`
+	TxBytes uint64 `json:"tx_bytes"`
+	Channel string `json:"channel"` // 数据通道："DTLS" 或 "TLS"
+	Cipher  string `json:"cipher"`  // 当前数据通道的密码套件
+}
+
+// PolicySummary 服务端下发的策略摘要（config_push.policy）。
+type PolicySummary struct {
+	PreferIPv6  bool  `json:"prefer_ipv6"`
+	Compression bool  `json:"compression"`
+	FakeDNS     bool  `json:"fakedns"`
+	SplitDNS    bool  `json:"split_dns"`
+	AllowLan    bool  `json:"allow_lan"`
+	KillSwitch  bool  `json:"kill_switch"` // 断网保护（P1d）：隧道断连窗口阻断明文出网
+	AclCount    int   `json:"acl_count"`
+	Bandwidth   int   `json:"bandwidth,omitempty"`
+	BandwidthUp int   `json:"bandwidth_up,omitempty"`
+	Quota       int64 `json:"quota,omitempty"`
+}
+
+// PolicyInfo 控制通道 config_push 的完整载荷（策略可视化 + 智能选路候选）。
+// json tag 与服务端 CtlConfigPush 对齐。
+type PolicyInfo struct {
+	Group         string        `json:"group,omitempty"`
+	PolicyName    string        `json:"policy_name,omitempty"`
+	Policy        PolicySummary `json:"policy"`
+	RoutesInclude []string      `json:"routes_include,omitempty"`
+	RoutesExclude []string      `json:"routes_exclude,omitempty"`
+	DNS           []string      `json:"dns,omitempty"`
+	Endpoints     []string      `json:"endpoints,omitempty"`
+}
+
+// Notice 通知中心条目（服务端消息/断开原因等）。
+type Notice struct {
+	Level string `json:"level"` // info | warn | error
+	Text  string `json:"text"`
+	Time  int64  `json:"time"` // Unix 秒
+}
+
 // FormField 单个认证输入字段。
 type FormField struct {
 	Name      string `json:"name"`
@@ -80,14 +124,34 @@ type AuthForm struct {
 	GroupSelected bool        `json:"group_selected"`
 }
 
+// WebAuthForm 原生认证表单（引擎消费服务端 WebAuth JSON API 后下发给 UI）。
+// Status 决定 UI 渲染哪种输入：
+//
+//	select_group → 组下拉框；credentials → 用户名/密码；otp → 动态码；
+//	sms_phone → 手机号；sms → 短信码；radius → 挑战码；change_pwd → 新密码×2。
+//
+// Error 非空表示上一次提交失败，UI 就地显示错误并允许重新输入。
+type WebAuthForm struct {
+	Status       string   `json:"status"`
+	Groups       []string `json:"groups,omitempty"`
+	Hint         string   `json:"hint,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	Username     string   `json:"username,omitempty"`
+	PhoneMasked  string   `json:"phone_masked,omitempty"`
+	ChallengeMsg string   `json:"challenge_msg,omitempty"`
+}
+
 // Event 是引擎 → UI 的事件通道载荷。
 type Event struct {
-	Kind    string      `json:"kind"` // status | form | tunnel | log | error | sso-login
-	Status  ConnStatus  `json:"status,omitempty"`
-	Form    *AuthForm   `json:"form,omitempty"`
-	Tunnel  *TunnelInfo `json:"tunnel,omitempty"`
-	Message string      `json:"message,omitempty"`
-	URL     string      `json:"url,omitempty"` // sso-login: WebAuth 登录地址，由 app 层打开 webview
+	Kind    string       `json:"kind"` // status | form | webauth | tunnel | log | error | sso-login | policy | notice
+	Status  ConnStatus   `json:"status,omitempty"`
+	Form    *AuthForm    `json:"form,omitempty"`
+	WebAuth *WebAuthForm `json:"webauth,omitempty"` // webauth: 原生认证表单（组选择/凭据/挑战码）
+	Tunnel  *TunnelInfo  `json:"tunnel,omitempty"`
+	Message string       `json:"message,omitempty"`
+	URL     string       `json:"url,omitempty"`    // sso-login: WebAuth 登录地址，由 app 层打开 webview
+	Policy  *PolicyInfo  `json:"policy,omitempty"` // policy: 服务端 config_push
+	Notice  *Notice      `json:"notice,omitempty"` // notice: 通知中心条目
 }
 
 // HumanBytes 把字节数格式化为人类可读串。

@@ -1,12 +1,12 @@
 // Package app 实现客户端与前端（原生引导页）交互的 Wails 服务。
 //
-// 连接模型（复用服务端 WebAuth / AnyConnect SSO v2，零改服务端）：
-//   - Connect(raw) 仅校验并持久化服务器地址，随后异步发起 SSO 连接；
-//   - 引擎 InitAuth 拿到 sso-v2-login（WebAuth 登录页地址），通过事件让 app
-//     在 webview 中打开它（不是系统浏览器）；
-//   - 用户在 WebAuth 页完成认证后，服务端 SAMLACLogin 把令牌 302 到
-//     http://localhost:29786/api/sso/{token}，由本服务的本地回调接住，
-//     唤醒引擎用 sso-token 换 session-token 并建隧道；
+// 连接模型（原生认证优先，复用服务端 WebAuth JSON API，零改服务端）：
+//   - Connect(raw) 仅校验并持久化服务器地址，随后异步发起连接；
+//   - 引擎 InitAuth 拿到 sso-v2-login 后提取 state，直接消费 WebAuth JSON API：
+//     组选择、账号密码、OTP/短信/RADIUS 挑战全部原生表单（引擎发 webauth 事件，
+//     前端渲染，SubmitAuth 回灌答案），认证完成以 state 为 sso-token 建隧道；
+//   - 仅企微/飞书等 SSO 组（status=sso）才打开 WebView 扫码，扫码后服务端把
+//     令牌 302 到 http://localhost:29786/api/sso/{token}，由本地回调接住；
 //   - 连上后 webview 回到主页（连接详情），右键托盘「进入门户」跳门户。
 //
 // 全程不经过 SPA 桥接、不依赖 window.go、不需要改服务端。
@@ -17,15 +17,18 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"remlink-client/internal/config"
 	"remlink-client/internal/engine"
 	"remlink-client/internal/types"
@@ -52,6 +55,11 @@ type ClientService struct {
 	lastTunnel  *types.TunnelInfo
 	connectedAt time.Time
 	lastError   string
+
+	// P1a：策略可视化 / 通知中心 / 智能选路
+	notifier   *notifications.NotificationService // 系统通知（可为 nil，降级为仅列表）
+	lastPolicy *types.PolicyInfo                  // 最近一次 config_push（策略卡片数据源）
+	epKey      string                             // 接入点缓存 key（用户输入的 base URL）
 }
 
 // New 构造服务并加载本地配置。
@@ -90,6 +98,9 @@ func (s *ClientService) SetApp(a *application.App) {
 
 // SetTray 注入系统托盘句柄，用于把连接状态/错误同步到托盘 tooltip（可见）。
 func (s *ClientService) SetTray(t *application.SystemTray) { s.tray = t }
+
+// SetNotifier 注入系统通知服务（main 注册 notifications 服务后调用）。
+func (s *ClientService) SetNotifier(n *notifications.NotificationService) { s.notifier = n }
 
 // clientLog 是客户端诊断日志（落盘到用户缓存目录），用于在无控制台的 GUI
 // 程序里排查「连接后无反应」类问题。所有事件/错误都会写入此处。
@@ -194,15 +205,87 @@ func (s *ClientService) Connect(raw string) (string, error) {
 
 	// 启动 SSO 本地回调（localhost:29786），并异步发起连接。
 	s.ensureSsoCallback()
+	s.epKey = base
 	go func() {
 		defer func() {
 			s.mu.Lock()
 			s.connecting = false
 			s.mu.Unlock()
 		}()
-		_ = s.vpn.Connect(context.Background(), &engine.Config{Server: s.lastBase})
+		// 智能选路：对「用户地址 + 服务端下发的接入点缓存」并发测速择优。
+		// 无缓存（首连/单入口部署）时直连用户地址，行为不变。
+		target := s.pickEndpoint(base)
+		s.lastBase = target
+		_ = s.vpn.Connect(context.Background(), &engine.Config{Server: target})
 	}()
 	return base, nil
+}
+
+// pickEndpoint 智能选路：候选 = 用户地址 + 缓存的服务端下发接入点，
+// 并发 TCP 测延迟选最快；全部失败时回退用户地址（交由连接流程报错）。
+func (s *ClientService) pickEndpoint(base string) string {
+	cached := s.cfg.CachedEndpoints[base]
+	if len(cached) == 0 {
+		return base
+	}
+	// 候选去重（host[:port] 归一化为 https://host[:port]）
+	seen := map[string]bool{base: true}
+	candidates := []string{base}
+	for _, ep := range cached {
+		b, err := normalizeServer(ep)
+		if err != nil || seen[b] {
+			continue
+		}
+		seen[b] = true
+		candidates = append(candidates, b)
+	}
+	if len(candidates) == 1 {
+		return base
+	}
+
+	type result struct {
+		base string
+		rtt  time.Duration
+	}
+	ch := make(chan result, len(candidates))
+	for _, c := range candidates {
+		go func(b string) {
+			host := strings.TrimPrefix(b, "https://")
+			if _, _, err := net.SplitHostPort(host); err != nil {
+				host = net.JoinHostPort(host, "443")
+			}
+			start := time.Now()
+			conn, err := net.DialTimeout("tcp", host, 3*time.Second)
+			if err != nil {
+				ch <- result{b, -1}
+				return
+			}
+			_ = conn.Close()
+			ch <- result{b, time.Since(start)}
+		}(c)
+	}
+	best := result{base, -1}
+	for range candidates {
+		r := <-ch
+		if r.rtt < 0 {
+			continue
+		}
+		if best.rtt < 0 || r.rtt < best.rtt {
+			best = r
+		}
+	}
+	if best.rtt < 0 {
+		return base // 全部不可达：回退用户地址，由连接流程给出明确错误
+	}
+	if clientLog != nil {
+		clientLog.Printf("智能选路: 候选 %d 个，选中 %s (%s)", len(candidates), best.base, best.rtt.Round(time.Millisecond))
+	}
+	if best.base != base {
+		s.handleEvent(types.Event{Kind: "log",
+			Message: "智能选路: 已选择最快接入点 " + strings.TrimPrefix(best.base, "https://") +
+				" (" + strconv.FormatInt(best.rtt.Milliseconds(), 10) + "ms)"})
+	}
+	return best.base
 }
 
 // OpenPortal 在新窗口中打开门户（门户信息多、需要更大窗口）。
@@ -223,12 +306,12 @@ func (s *ClientService) OpenPortal() error {
 		return nil
 	}
 	w := s.appApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:                 "RemLink 门户",
-		BackgroundColour:      application.NewRGB(27, 33, 56),
-		Width:                 1000,
-		Height:                720,
-		MinWidth:              820,
-		MinHeight:             600,
+		Title:            "RemLink 门户",
+		BackgroundColour: application.NewRGB(27, 33, 56),
+		Width:            1000,
+		Height:           720,
+		MinWidth:         820,
+		MinHeight:        600,
 	})
 	s.portalWin = w
 	// 关闭后清空引用，下次「进入门户」重新创建
@@ -277,12 +360,12 @@ func (s *ClientService) openWebAuthWindow(u string) {
 		return
 	}
 	w := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:                 "RemLink 登录",
-		BackgroundColour:      application.NewRGB(27, 33, 56),
-		Width:                 1000,
-		Height:                720,
-		MinWidth:              820,
-		MinHeight:             600,
+		Title:            "RemLink 登录",
+		BackgroundColour: application.NewRGB(27, 33, 56),
+		Width:            1000,
+		Height:           720,
+		MinWidth:         820,
+		MinHeight:        600,
 	})
 	s.webauthWin = w
 	if clientLog != nil {
@@ -359,6 +442,37 @@ func (s *ClientService) GetStatus() map[string]any {
 	return m
 }
 
+// GetStats 返回当前隧道实时统计（流量/数据通道/密码套件），未连接返回 nil。
+// 前端在连接详情页轮询调用。
+func (s *ClientService) GetStats() *types.TunnelStats {
+	if s.vpn == nil {
+		return nil
+	}
+	return s.vpn.Stats()
+}
+
+// GetPolicy 返回最近一次服务端下发的策略快照（策略卡片数据源），未下发返回 nil。
+func (s *ClientService) GetPolicy() *types.PolicyInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastPolicy
+}
+
+// GetNotices 返回通知中心列表（最新在前，最多 50 条）。
+func (s *ClientService) GetNotices() []types.Notice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Notices
+}
+
+// ClearNotices 清空通知中心。
+func (s *ClientService) ClearNotices() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Notices = nil
+	return s.cfg.Save()
+}
+
 // RemoveServer 删除一个已保存的服务器。
 func (s *ClientService) RemoveServer(raw string) error {
 	base, err := normalizeServer(raw)
@@ -378,6 +492,15 @@ func (s *ClientService) RemoveServer(raw string) error {
 	return s.cfg.Save()
 }
 
+// SubmitAuth 提交原生认证表单答案（组选择/账号密码/OTP/短信/挑战码/改密），
+// 由前端认证卡片调用，唤醒引擎中阻塞等待的 WebAuth 状态机。
+func (s *ClientService) SubmitAuth(answers map[string]string) error {
+	if s.vpn == nil {
+		return errors.New("引擎未就绪")
+	}
+	return s.vpn.Submit(answers)
+}
+
 // Disconnect 断开连接并复位回原生主页（真实隧道释放由引擎负责）。
 func (s *ClientService) Disconnect() error {
 	if s.vpn != nil {
@@ -387,6 +510,14 @@ func (s *ClientService) Disconnect() error {
 		s.window.SetURL("/")
 	}
 	return nil
+}
+
+// RunDiagnostics 本地网络诊断（工具页“运行网络诊断”调用），需已建立隧道。
+func (s *ClientService) RunDiagnostics() (map[string]any, error) {
+	if s.vpn == nil {
+		return nil, errors.New("引擎未就绪")
+	}
+	return s.vpn.RunDiagnostics()
 }
 
 // forwardEngineEvents 把隧道引擎事件转发到前端与本地处理。
@@ -414,6 +545,7 @@ func (s *ClientService) handleEvent(e types.Event) {
 		}
 		if e.Status == types.StatusDisconnected || e.Status == types.StatusError {
 			s.connectedAt = time.Time{}
+			s.lastPolicy = nil // 策略随会话失效，避免详情页残留旧策略
 			if e.Kind == "status" && e.Status == types.StatusDisconnected {
 				s.lastError = ""
 			}
@@ -428,8 +560,43 @@ func (s *ClientService) handleEvent(e types.Event) {
 		}
 	case "error":
 		s.lastError = e.Message
+	case "policy":
+		if e.Policy != nil {
+			s.lastPolicy = e.Policy
+			// 缓存服务端下发的接入点列表（下次连接前测速择优）
+			if s.epKey != "" {
+				if s.cfg.CachedEndpoints == nil {
+					s.cfg.CachedEndpoints = map[string][]string{}
+				}
+				// 空列表也覆盖：管理员清空配置后客户端同步回单入口
+				s.cfg.CachedEndpoints[s.epKey] = e.Policy.Endpoints
+				_ = s.cfg.Save()
+			}
+		}
+	case "notice":
+		if e.Notice != nil {
+			// 通知中心：头插保留最近 50 条并持久化
+			s.cfg.Notices = append([]types.Notice{*e.Notice}, s.cfg.Notices...)
+			if len(s.cfg.Notices) > 50 {
+				s.cfg.Notices = s.cfg.Notices[:50]
+			}
+			_ = s.cfg.Save()
+		}
 	}
 	s.mu.Unlock()
+
+	// 系统通知（列表持久化之外的即时提醒；服务未注入时静默降级）
+	if e.Kind == "notice" && e.Notice != nil && s.notifier != nil {
+		title := "RemLink 消息"
+		if e.Notice.Level == "warn" || e.Notice.Level == "error" {
+			title = "RemLink 警告"
+		}
+		_ = s.notifier.SendNotification(notifications.NotificationOptions{
+			ID:    "remlink-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			Title: title,
+			Body:  e.Notice.Text,
+		})
+	}
 
 	if clientLog != nil {
 		clientLog.Printf("event kind=%s status=%s msg=%s", e.Kind, e.Status, e.Message)
@@ -441,6 +608,9 @@ func (s *ClientService) handleEvent(e types.Event) {
 		if clientLog != nil {
 			clientLog.Printf("handleEvent: 收到 sso-login 事件，准备开独立窗口 url=%s", e.URL)
 		}
+		// 弹出独立「登录窗口」加载 SSO 页（与门户同尺寸 1000×720，非系统浏览器、
+		// 不经过 SPA 桥接）。认证成功后该窗口会被原地提升为门户窗口。
+		// 当前主窗口保持 SPA 不变，避免白屏突兀。
 		s.openWebAuthWindow(e.URL)
 	}
 	// 连接状态变化：主窗口回到连接详情页；连接成功时把登录窗口提升为门户。
@@ -450,7 +620,11 @@ func (s *ClientService) handleEvent(e types.Event) {
 			s.window.SetURL("/")
 			s.promoteWebAuthToPortal()
 		case types.StatusError:
+			// 出错时主窗口回到首页展示错误，并关闭登录窗口——
+			// 否则用户会一直卡在「正在建立安全连接」页（该页由本地 SSO 回调返回，
+			// 停在 webauth 窗口上），真实的「认证/隧道建立失败」原因被挡在背后。
 			s.window.SetURL("/")
+			s.closeWebAuthWindow()
 		case types.StatusDisconnected:
 			s.window.SetURL("/")
 			s.closeWebAuthWindow()
@@ -471,6 +645,8 @@ func (s *ClientService) handleEvent(e types.Event) {
 				s.tray.SetTooltip("RemLink：已连接 " + s.lastBase)
 			case types.StatusConnecting:
 				s.tray.SetTooltip("RemLink：连接中…")
+			case types.StatusReconnecting:
+				s.tray.SetTooltip("RemLink：重连中…")
 			case types.StatusDisconnected:
 				s.tray.SetTooltip("RemLink：未连接")
 			}

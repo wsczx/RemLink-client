@@ -127,7 +127,8 @@ func payloadInToTun(dev tun.Device, cSess *session.ConnSession) {
 		}
 
 		// 只有当使用域名分流且返回数据包为 DNS 时才进一步分析，少建几个协程
-		if cSess.DynamicSplitTunneling {
+		// 注意：ResolvePacket/gopacket 按 IPv4 解析，v6 包必须跳过（域名分流仅作用于 v4）
+		if cSess.DynamicSplitTunneling && len(pl.Data) > 0 && pl.Data[0]>>4 == 4 {
 			_, srcPort, _, _ := utils.ResolvePacket(pl.Data)
 			if srcPort == 53 {
 				go dynamicSplitRoutes(pl.Data, cSess)

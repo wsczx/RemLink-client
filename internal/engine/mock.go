@@ -105,6 +105,23 @@ func (m *mockEngine) Submit(answers map[string]string) error {
 
 func (m *mockEngine) SubmitSSOToken(token string) error { return nil }
 
+func (m *mockEngine) Stats() *types.TunnelStats {
+	return &types.TunnelStats{RxBytes: 1536, TxBytes: 768, Channel: "DTLS", Cipher: "MOCK-CIPHER"}
+}
+
+func (m *mockEngine) RunDiagnostics() (map[string]any, error) {
+	return map[string]any{
+		"gw_ping":      true,
+		"gw_addr":      "mock-gateway",
+		"vpn_addr":     "10.8.0.42",
+		"mtu":          1400,
+		"dns":          true,
+		"dns_server":   "8.8.8.8",
+		"routes_include": 0,
+		"routes_exclude": 0,
+	}, nil
+}
+
 func (m *mockEngine) Disconnect() error {
 	if m.cancel != nil {
 		m.cancel()
