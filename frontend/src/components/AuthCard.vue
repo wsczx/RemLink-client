@@ -19,6 +19,10 @@
         </button>
       </div>
     </template>
+    <template v-else-if="form?.status === 'identify'">
+      <div class="group-tip">请输入用户名以加载您可接入的用户组</div>
+      <n-input v-model:value="identifyUser" placeholder="用户名" />
+    </template>
     <template v-else-if="form?.status === 'credentials'">
       <n-input v-model:value="username" placeholder="用户名" />
       <n-input
@@ -61,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { NCard, NAlert, NInput, NButton } from "naive-ui";
 import { useAuthStore } from "../stores/auth";
 
@@ -69,6 +73,7 @@ const auth = useAuthStore();
 const form = computed(() => auth.form);
 
 const group = ref("");
+const identifyUser = ref("");
 const username = ref("");
 const password = ref("");
 const phone = ref("");
@@ -81,6 +86,8 @@ const title = computed(() => {
   switch (form.value?.status) {
     case "select_group":
       return "选择用户组";
+    case "identify":
+      return "身份认证";
     case "credentials":
       return "账号登录";
     case "sms_phone":
@@ -99,7 +106,9 @@ const title = computed(() => {
 
 // 选组步骤未选组时禁用「下一步」
 const submitDisabled = computed(
-  () => form.value?.status === "select_group" && !group.value,
+  () =>
+    (form.value?.status === "select_group" && !group.value) ||
+    (form.value?.status === "identify" && !identifyUser.value),
 );
 
 const codePlaceholder = computed(() => {
@@ -115,14 +124,27 @@ const codePlaceholder = computed(() => {
   }
 });
 
+// identify 阶段已输入用户名，进入凭据步骤时自动预填，避免用户重复输入。
+watch(
+  () => form.value?.status,
+  (s) => {
+    if (s === "credentials" && !username.value && form.value?.username) {
+      username.value = form.value.username;
+    }
+  },
+);
+
 function buildAnswers(): Record<string, string> {
   const a: Record<string, string> = {};
   switch (form.value?.status) {
     case "select_group":
       a.group = group.value;
       break;
+    case "identify":
+      a.username = identifyUser.value;
+      break;
     case "credentials":
-      a.username = username.value;
+      a.username = username.value || form.value?.username || "";
       a.password = password.value;
       break;
     case "sms_phone":
@@ -146,6 +168,7 @@ async function submit() {
   try {
     await auth.submit(buildAnswers());
     group.value = "";
+    identifyUser.value = "";
     username.value = "";
     password.value = "";
     phone.value = "";

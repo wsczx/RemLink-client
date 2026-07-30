@@ -218,6 +218,19 @@ func (r *realEngine) nativeWebAuth(ctx context.Context) (string, error) {
 	defer deadline.Stop()
 
 	var lastForm *types.WebAuthForm // 上一次下发的表单，凭据错误时携带错误信息重发
+
+	// 组过滤开关开启时（RequireIdentify=true）：展示组清单前先收集用户名，
+	// 按 User.Groups 过滤可选组，缩短清单并避免展示无权限组。
+	// 开关关闭（默认）则直接展示全量启用组，保持改造前的默认行为。
+	if st.Status == "select_group" && st.RequireIdentify {
+		origGroups := st.Groups
+		if filtered, ferr := r.doIdentify(ctx, state, deadline); ferr == nil {
+			st = filtered
+		} else {
+			st = &auth.WebAuthState{Status: "select_group", Groups: origGroups}
+		}
+	}
+
 	for {
 		switch st.Status {
 		case "done":
@@ -295,6 +308,21 @@ func webAuthSubmit(state, formStatus string, ans map[string]string) (*auth.WebAu
 		// credentials/otp/sms/sms_phone/radius：键名与服务端 WebAuthStep 对齐
 		return auth.WebAuthStep(state, ans)
 	}
+}
+
+// doIdentify 收集用户名并提交到 /web-auth/identify，取回按权限过滤后的可选组列表。
+func (r *realEngine) doIdentify(ctx context.Context, state string, deadline *time.Timer) (*auth.WebAuthState, error) {
+	form := &types.WebAuthForm{Status: "identify", Hint: "请输入用户名以加载可用用户组"}
+	emit(r.events, types.Event{Kind: "webauth", WebAuth: form})
+	ans, werr := r.waitAnswers(ctx, deadline)
+	if werr != nil {
+		return nil, werr
+	}
+	username := strings.TrimSpace(ans["username"])
+	if username == "" {
+		return nil, errors.New("请输入用户名")
+	}
+	return auth.WebAuthIdentify(state, username)
 }
 
 // waitAnswers 阻塞等待 UI 提交表单答案（Submit 写入 answersCh）。

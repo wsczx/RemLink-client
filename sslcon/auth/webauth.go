@@ -29,16 +29,17 @@ import (
 
 // WebAuthState 服务端 WebAuth JSON 响应（字段并集，按 Status 取用）。
 type WebAuthState struct {
-	Status       string   `json:"status"`        // select_group|credentials|sms_phone|otp|sms|radius|change_pwd|sso|done|error
-	Message      string   `json:"message"`       // error：错误原因
-	Groups       []string `json:"groups"`        // select_group：可选组列表
-	Hint         string   `json:"hint"`          // 输入提示
-	Username     string   `json:"username"`      // credentials：预填用户名
-	PhoneMasked  string   `json:"phone_masked"`  // sms：脱敏手机号
-	ChallengeMsg string   `json:"challenge_msg"` // radius：挑战提示
-	SsoType      string   `json:"sso_type"`      // sso：wxwork|feishu|saml
-	RedirectURL  string   `json:"redirect_url"`  // sso：IdP 跳转地址（WebView 打开）
-	CompleteURL  string   `json:"complete_url"`  // done：完成端点（原生流程不使用）
+	Status          string   `json:"status"`           // identify|select_group|credentials|sms_phone|otp|sms|radius|change_pwd|sso|done|error
+	Message         string   `json:"message"`          // error：错误原因
+	Groups          []string `json:"groups"`           // select_group：可选组列表
+	Hint            string   `json:"hint"`             // 输入提示
+	Username        string   `json:"username"`         // credentials：预填用户名
+	PhoneMasked     string   `json:"phone_masked"`     // sms：脱敏手机号
+	ChallengeMsg    string   `json:"challenge_msg"`    // radius：挑战提示
+	SsoType         string   `json:"sso_type"`         // sso：wxwork|feishu|saml
+	RedirectURL     string   `json:"redirect_url"`     // sso：IdP 跳转地址（WebView 打开）
+	CompleteURL     string   `json:"complete_url"`     // done：完成端点（原生流程不使用）
+	RequireIdentify bool     `json:"require_identify"` // select_group：开启组过滤时，需先收集用户名再按权限过滤组
 }
 
 // WebAuthStateParam 从 sso-v2-login URL（/+CSCOE+/web-auth/sp/login?state=XXX）
@@ -59,6 +60,11 @@ func WebAuthStart(state string) (*WebAuthState, error) {
 // WebAuthSelectGroup 选定组，返回该组首步认证方式（credentials/sms_phone/sso/…）。
 func WebAuthSelectGroup(state, group string) (*WebAuthState, error) {
 	return webAuthDo(http.MethodPost, "/web-auth/groups", state, map[string]string{"group": group})
+}
+
+// WebAuthIdentify 先输入用户名，服务端按 User.Groups 过滤后返回可选组列表。
+func WebAuthIdentify(state, username string) (*WebAuthState, error) {
+	return webAuthDo(http.MethodPost, "/web-auth/identify", state, map[string]string{"username": username})
 }
 
 // WebAuthStep 提交凭据或挑战码，推进认证管道。
