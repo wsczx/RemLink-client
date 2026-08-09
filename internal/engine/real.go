@@ -118,12 +118,19 @@ func (r *realEngine) Connect(ctx context.Context, cfg *Config) error {
 		return err
 	}
 
-	// 服务端未返回 SSO v2 登录地址：说明该网关未启用 WebAuth，或 UA 被识别为
-	// 凭据模式。客户端目前只走 WebAuth/SSO 路径，故直接报错提示。
+	// 服务端未返回 SSO v2 登录地址：说明该网关未启用 WebAuth，走标准凭据路径
+	// （纯账密/OTP 组，init 已拿到标准 <auth> 表单）。这是 RemLink AnyConnect 兼容
+	// 服务端的默认行为，标准协议路径原生支持，无需 WebAuth/SSO。
 	if auth.Prof.SsoV2Login == "" {
-		emit(r.events, types.Event{Kind: "error", Message: "服务器未返回 WebAuth 登录地址，请确认服务端已启用 WebAuth"})
-		emit(r.events, types.Event{Kind: "status", Status: types.StatusError})
-		return errors.New("服务器未返回 WebAuth 登录地址")
+		emit(r.events, types.Event{Kind: "log", Message: "服务端未启用 WebAuth，使用标准凭据认证"})
+		if err := auth.PasswordAuth(); err != nil {
+			emit(r.events, types.Event{Kind: "error", Message: "凭据认证失败: " + err.Error()})
+			emit(r.events, types.Event{Kind: "status", Status: types.StatusError})
+			return err
+		}
+		// 凭据认证成功，直接进入建隧道阶段（复用下方 SSO 成功后的隧道建立流程）。
+		auth.Prof.SsoToken = ""
+		return r.buildTunnel(ctx, cfg)
 	}
 
 	// 原生认证（AnyConnect 同款模型）：客户端直接消费服务端 WebAuth JSON API，
@@ -149,18 +156,27 @@ func (r *realEngine) Connect(ctx context.Context, cfg *Config) error {
 	// 用 SSO 令牌提交 auth-reply，handleSsoToken 还原会话并签发 session-token。
 	auth.Prof.SsoToken = ssoToken
 
-	// 令牌已捕获，进入「认证换会话 + 建隧道」阶段。该阶段若因服务端无响应 /
-	// TUN/路由设置阻塞而挂起，用户会一直卡在「正在建立安全连接」登录页；
-	// 用看门狗在 90s 内未完成时上报超时，让真实错误暴露出来（而非无限转圈）。
+	// 令牌已捕获，进入「认证换会话 + 建隧道」阶段（与标准凭据路径共用 buildTunnel）。
+	return r.buildTunnel(ctx, cfg)
+}
+
+// buildTunnel 把「认证成功 → 建隧道 + 控制通道 + 重连看护」收口为单一入口，
+// 供 SSO 令牌路径与标准凭据路径共用，避免两段重复建隧道逻辑。
+// 90s 看门狗：认证/隧道建立阶段若因服务端无响应或 TUN/路由阻塞而挂起，
+// 上报超时暴露真实错误，避免用户无限转圈。
+func (r *realEngine) buildTunnel(ctx context.Context, cfg *Config) error {
 	done := make(chan error, 1)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		if err := auth.SsoAuth(); err != nil {
-			done <- err
-			return
+		if auth.Prof.SsoToken != "" {
+			// SSO 路径：用令牌提交 auth-reply，handleSsoToken 还原会话并签发 session-token。
+			if err := auth.SsoAuth(); err != nil {
+				done <- err
+				return
+			}
 		}
-		// session.Sess.SessionToken 已由 SsoAuth 设置（来自服务端签发的 session-token）。
+		// session.Sess.SessionToken 已由 SsoAuth/PasswordAuth 设置（来自服务端签发的 session-token）。
 		emit(r.events, types.Event{Kind: "log", Message: "认证成功，正在建立安全隧道…"})
 		r.server = cfg.Server
 		if err := vpn.SetupTunnel(); err != nil {

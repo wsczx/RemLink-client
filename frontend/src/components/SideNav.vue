@@ -20,19 +20,22 @@
 
     <!-- 导航：固定区域，不随内容拉伸 -->
     <div class="nav-wrap">
-      <button
-        v-for="item in items"
-        :key="item.key"
-        class="nav-item"
-        :class="{ active: props.active === item.key }"
-        @click="emit('update:active', item.key)"
-      >
-        <span class="nav-ico">{{ item.ico }}</span>
-        <span class="nav-label">{{ item.label }}</span>
-        <span v-if="item.key === 'notice' && notices.count" class="nav-badge">{{
-          notices.count > 99 ? '99+' : notices.count
-        }}</span>
-      </button>
+      <div v-for="group in navGroups" :key="group.title" class="nav-group">
+        <div v-if="group.title" class="nav-group-title">{{ group.title }}</div>
+        <button
+          v-for="item in group.items"
+          :key="item.key"
+          class="nav-item"
+          :class="{ active: props.active === item.key }"
+          @click="emit('update:active', item.key)"
+        >
+          <span class="nav-ico" v-html="item.ico"></span>
+          <span class="nav-label">{{ item.label }}</span>
+          <span v-if="item.key === 'notice' && notices.count" class="nav-badge">{{
+            notices.count > 99 ? '99+' : notices.count
+          }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- 底部版本（固定在侧栏底部） -->
@@ -51,11 +54,40 @@ const props = defineProps<{ active: string }>();
 const emit = defineEmits<{ (e: "update:active", v: string): void }>();
 
 const notices = useNoticesStore();
-const items = [
-  { key: "overview", ico: "◉", label: "概览" },
-  { key: "policy", ico: "⚡", label: "策略" },
-  { key: "notice", ico: "◈", label: "通知" },
-  { key: "tools", ico: "⬡", label: "工具" },
+
+// 精致 SVG 图标（内联，避免外部依赖）
+const I = {
+  overview:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.5-7 10-7 10Z"/><circle cx="12" cy="11" r="1.6" fill="currentColor" stroke="none"/></svg>',
+  webapps:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+  devices:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="14" height="11" rx="1.5"/><path d="M7 19h6M9 15v4"/><rect x="18" y="8" width="4" height="9" rx="1"/></svg>',
+  policy:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 6v6c0 5 3.5 8 9 10 5.5-2 9-5 9-10V6l-9-4Z"/><path d="m9 12 2.5 2.5L15 10"/></svg>',
+  notice:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+  tools:
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6Z"/></svg>',
+};
+
+const navGroups = [
+  {
+    title: "",
+    items: [
+      { key: "overview", ico: I.overview, label: "概览" },
+      { key: "webapps", ico: I.webapps, label: "应用" },
+      { key: "devices", ico: I.devices, label: "设备" },
+    ],
+  },
+  {
+    title: "控制台",
+    items: [
+      { key: "policy", ico: I.policy, label: "策略" },
+      { key: "notice", ico: I.notice, label: "通知" },
+      { key: "tools", ico: I.tools, label: "工具" },
+    ],
+  },
 ];
 const version = ref("—");
 
@@ -133,6 +165,19 @@ onMounted(() => {
   text-align: left;
   position: relative;
 }
+/* ── 导航分组 ── */
+.nav-group {
+  margin-bottom: 14px;
+}
+.nav-group-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #475569;
+  padding: 4px 12px 7px;
+}
+
 .nav-item:hover {
   background: rgba(255, 255, 255, 0.06);
   color: #eef3fb;

@@ -30,6 +30,9 @@ export const ClearNotices = (): Promise<void> => call("ClearNotices");
 export const RemoveServer = (raw: string): Promise<void> =>
   call("RemoveServer", [raw]);
 export const OpenPortal = (): Promise<void> => call("OpenPortal");
+export const WebVpnMyApps = (): Promise<
+  Array<{ name: string; note: string; url: string }>
+> => call("WebVpnMyApps");
 export const Disconnect = (): Promise<void> => call("Disconnect");
 export const Minimize = (): Promise<void> => call("Minimize");
 export const HideWindow = (): Promise<void> => call("HideWindow");

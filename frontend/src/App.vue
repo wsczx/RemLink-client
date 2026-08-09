@@ -8,6 +8,8 @@
             <main class="app-main">
               <TitleBar />
               <OverviewView v-if="active === 'overview'" />
+              <WebAppsView v-else-if="active === 'webapps'" />
+              <DevicesView v-else-if="active === 'devices'" />
               <PolicyView v-else-if="active === 'policy'" />
               <NoticesView v-else-if="active === 'notice'" />
               <ToolsView v-else-if="active === 'tools'" />
@@ -25,6 +27,8 @@ import { NConfigProvider, NMessageProvider, NDialogProvider } from "naive-ui";
 import TitleBar from "./components/TitleBar.vue";
 import SideNav from "./components/SideNav.vue";
 import OverviewView from "./views/OverviewView.vue";
+import WebAppsView from "./views/WebAppsView.vue";
+import DevicesView from "./views/DevicesView.vue";
 import PolicyView from "./views/PolicyView.vue";
 import NoticesView from "./views/NoticesView.vue";
 import ToolsView from "./views/ToolsView.vue";

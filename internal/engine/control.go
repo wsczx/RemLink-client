@@ -31,22 +31,34 @@ import (
 
 // ctlCommand 服务端→客户端命令
 type ctlCommand struct {
-	Type   string `json:"type"`             // disconnect | message | config_push | device_challenge | diag_request
-	Reason string `json:"reason,omitempty"` // disconnect 原因码
-	Level  string `json:"level,omitempty"`  // message: info|warn|error
-	Text   string `json:"text,omitempty"`   // message 正文
-	ID     string `json:"id,omitempty"`     // device_challenge nonce 标识 / diag_request 请求 id
-	Nonce  string `json:"nonce,omitempty"`  // device_challenge: 服务端下发的随机挑战值
+	Type    string      `json:"type"`             // disconnect | message | config_push | device_challenge | diag_request | device_list
+	Reason  string      `json:"reason,omitempty"` // disconnect 原因码
+	Level   string      `json:"level,omitempty"`  // message: info|warn|error
+	Text    string      `json:"text,omitempty"`   // message 正文
+	ID      string      `json:"id,omitempty"`     // device_challenge nonce 标识 / diag_request 请求 id
+	Nonce   string      `json:"nonce,omitempty"`  // device_challenge: 服务端下发的随机挑战值
+	Devices []ctlDevice `json:"devices,omitempty"` // device_list: 当前账号已绑定设备
 }
 
-// ctlUp 客户端→服务端上行回执（device_proof / diag_result）
+// ctlUp 客户端→服务端上行回执（device_register / device_proof / diag_result）
 type ctlUp struct {
-	Type    string                 `json:"type"`
-	ID      string                 `json:"id,omitempty"`
-	Nonce   string                 `json:"nonce,omitempty"`
-	PubKey  string                 `json:"pubkey,omitempty"` // device_proof: 设备公钥(hex)
-	Sig     string                 `json:"sig,omitempty"`    // device_proof: 对 nonce 的 Ed25519 签名(hex)
-	Results map[string]interface{} `json:"results,omitempty"` // diag_result: 各项诊断结果
+	Type     string                 `json:"type"`
+	ID       string                 `json:"id,omitempty"`
+	Nonce    string                 `json:"nonce,omitempty"`
+	PubKey   string                 `json:"pubkey,omitempty"`   // device_proof/device_register: 设备公钥(hex)
+	Sig      string                 `json:"sig,omitempty"`      // device_proof: 对 nonce 的 Ed25519 签名(hex)
+	DeviceID string                 `json:"device_id,omitempty"` // device_register: 稳定设备指纹，关联证书绑定链(BindDevice)
+	Results  map[string]interface{} `json:"results,omitempty"`   // diag_result: 各项诊断结果
+}
+
+// ctlDevice 设备列表条目（服务端 device_list 下发）。
+type ctlDevice struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
+	Platform   string `json:"platform"`
+	ThisDevice bool   `json:"this_device"`
+	BoundAt    int64  `json:"bound_at"`
+	LastActive int64  `json:"last_active"`
 }
 
 // ctlHeartbeat 客户端→服务端心跳
@@ -155,10 +167,13 @@ func (r *realEngine) controlLoop(ctx context.Context) {
 // ctlSession 在一条已建立的控制通道上跑心跳与命令分发；
 // 返回 true 表示收到服务端 disconnect（已执行断开），false 表示通道掉线。
 func (r *realEngine) ctlSession(ctx context.Context, conn *websocket.Conn) bool {
-	// 接入后上报设备公钥（P1b）：供服务端 device_challenge 校验用。
-	if pubHex, err := devicePubKeyHex(); err == nil {
-		r.ctlSendUp(ctx, conn, ctlUp{Type: "device_register", PubKey: pubHex})
-	}
+	// 接入后上报设备公钥（P1b）+ 稳定设备指纹（G3：关联证书绑定链 BindDevice）。
+	pubHex, _ := devicePubKeyHex()
+	r.ctlSendUp(ctx, conn, ctlUp{
+		Type:     "device_register",
+		PubKey:   pubHex,
+		DeviceID: deviceFingerprint(),
+	})
 	// 心跳协程：写失败即退出（读循环会随之出错返回）
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
@@ -240,6 +255,23 @@ func (r *realEngine) ctlSession(ctx context.Context, conn *websocket.Conn) bool 
 				Sig:    sigHex,
 			})
 			emit(r.events, types.Event{Kind: "log", Message: "已回应设备挑战（持续信任证明）"})
+		case "device_list":
+			// G3：服务端下推当前账号已绑定设备列表（含本机标记），供前端「设备管理」视图渲染。
+			if len(cmd.Devices) == 0 {
+				break
+			}
+			devices := make([]types.DeviceBinding, 0, len(cmd.Devices))
+			for _, d := range cmd.Devices {
+				devices = append(devices, types.DeviceBinding{
+					DeviceID:   d.DeviceID,
+					DeviceName: d.DeviceName,
+					Platform:   d.Platform,
+					ThisDevice: d.ThisDevice,
+					BoundAt:    d.BoundAt,
+					LastActive: d.LastActive,
+				})
+			}
+			emit(r.events, types.Event{Kind: "devices", Devices: devices})
 		}
 	}
 }

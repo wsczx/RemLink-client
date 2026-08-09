@@ -29,9 +29,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+	"remlink-client/core"
 	"remlink-client/internal/config"
 	"remlink-client/internal/engine"
 	"remlink-client/internal/types"
+	"remlink-client/transport"
 )
 
 // ClientService 是绑定到前端的服务实例。
@@ -40,8 +42,9 @@ type ClientService struct {
 	window     *application.WebviewWindow
 	tray       *application.SystemTray // 系统托盘句柄，用于把连接状态/错误同步到托盘 tooltip（可见）
 	cfg        *config.AppConfig
-	lastBase   string // 最近一次连接的网关地址（https://host）
-	vpn        engine.Engine
+	lastBase   string                     // 最近一次连接的网关地址（https://host）
+	vpn        engine.Engine              // 当前连接的底层引擎实例（由 machine 持有 transport 封装，仅 SSO 回调用）
+	machine    *core.Machine              // P3：平台无关连接状态机，统一驱动认证/重连/事件分发
 	portalWin  *application.WebviewWindow // 已打开的门户窗口（避免重复创建）
 	webauthWin *application.WebviewWindow // 独立的 WebAuth 登录窗口（与门户同尺寸）
 
@@ -68,9 +71,8 @@ func New() *ClientService {
 	if err != nil {
 		cfg = &config.AppConfig{}
 	}
-	svc := &ClientService{cfg: cfg, vpn: engine.NewReal()}
+	svc := &ClientService{cfg: cfg}
 	initLogging()
-	go svc.forwardEngineEvents()
 	return svc
 }
 
@@ -216,7 +218,20 @@ func (s *ClientService) Connect(raw string) (string, error) {
 		// 无缓存（首连/单入口部署）时直连用户地址，行为不变。
 		target := s.pickEndpoint(base)
 		s.lastBase = target
-		_ = s.vpn.Connect(context.Background(), &engine.Config{Server: target})
+
+		// P3：用 core.Machine 驱动连接。引擎经 transport 桥接为 core.Transport，
+		// Machine 统一接管认证/重连/事件分发；SSO 仍由 sso-login 事件 + 本地
+		// 回调驱动（回调直接调 machine.SubmitSSOToken），不依赖 SSOHandler 接口。
+		eng := engine.NewReal()
+		tr := transport.New(eng)
+		s.mu.Lock()
+		s.vpn = eng
+		s.machine = core.NewMachine(tr, nil)
+		s.mu.Unlock()
+
+		// 订阅 Machine 事件作为唯一事件源（bus 在 Disconnect 时关闭，goroutine 随之退出）。
+		go s.forwardMachineEvents(s.machine)
+		_ = s.machine.Connect(context.Background(), core.Profile{Host: target})
 	}()
 	return base, nil
 }
@@ -423,6 +438,7 @@ func (s *ClientService) closeWebAuthWindow() {
 }
 
 // GetStatus 返回当前连接状态，供主页在 webview 跳转后拉取（弥补错过的事件）。
+// P3：状态由 core.Machine 缓存快照提供，前端无需关心事件时序。
 func (s *ClientService) GetStatus() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -430,8 +446,8 @@ func (s *ClientService) GetStatus() map[string]any {
 		"status": s.status.String(),
 		"server": s.lastBase,
 	}
-	if s.lastTunnel != nil {
-		m["tunnel"] = s.lastTunnel
+	if snap := s.snapshot(); snap.Tunnel != nil {
+		m["tunnel"] = snap.Tunnel
 	}
 	if s.status == types.StatusConnected && !s.connectedAt.IsZero() {
 		m["duration_secs"] = uint64(time.Since(s.connectedAt).Seconds())
@@ -442,13 +458,24 @@ func (s *ClientService) GetStatus() map[string]any {
 	return m
 }
 
+// snapshot 在已持有 s.mu 时获取 Machine 状态快照（避免重复加锁）。
+func (s *ClientService) snapshot() core.Event {
+	if s.machine != nil {
+		return s.machine.Snapshot()
+	}
+	return core.Event{}
+}
+
 // GetStats 返回当前隧道实时统计（流量/数据通道/密码套件），未连接返回 nil。
 // 前端在连接详情页轮询调用。
 func (s *ClientService) GetStats() *types.TunnelStats {
-	if s.vpn == nil {
+	s.mu.Lock()
+	m := s.machine
+	s.mu.Unlock()
+	if m == nil {
 		return nil
 	}
-	return s.vpn.Stats()
+	return m.Stats()
 }
 
 // GetPolicy 返回最近一次服务端下发的策略快照（策略卡片数据源），未下发返回 nil。
@@ -493,18 +520,25 @@ func (s *ClientService) RemoveServer(raw string) error {
 }
 
 // SubmitAuth 提交原生认证表单答案（组选择/账号密码/OTP/短信/挑战码/改密），
-// 由前端认证卡片调用，唤醒引擎中阻塞等待的 WebAuth 状态机。
+// 由前端认证卡片调用，唤醒连接状态机中阻塞等待的 WebAuth 状态机。
 func (s *ClientService) SubmitAuth(answers map[string]string) error {
-	if s.vpn == nil {
-		return errors.New("引擎未就绪")
+	s.mu.Lock()
+	m := s.machine
+	s.mu.Unlock()
+	if m == nil {
+		return errors.New("连接未就绪")
 	}
-	return s.vpn.Submit(answers)
+	m.Submit("webauth", answers)
+	return nil
 }
 
-// Disconnect 断开连接并复位回原生主页（真实隧道释放由引擎负责）。
+// Disconnect 断开连接并复位回原生主页（真实隧道释放由 Machine 负责）。
 func (s *ClientService) Disconnect() error {
-	if s.vpn != nil {
-		_ = s.vpn.Disconnect()
+	s.mu.Lock()
+	m := s.machine
+	s.mu.Unlock()
+	if m != nil {
+		m.Disconnect()
 	}
 	if s.window != nil {
 		s.window.SetURL("/")
@@ -514,17 +548,60 @@ func (s *ClientService) Disconnect() error {
 
 // RunDiagnostics 本地网络诊断（工具页“运行网络诊断”调用），需已建立隧道。
 func (s *ClientService) RunDiagnostics() (map[string]any, error) {
-	if s.vpn == nil {
-		return nil, errors.New("引擎未就绪")
+	s.mu.Lock()
+	m := s.machine
+	s.mu.Unlock()
+	if m == nil {
+		return nil, errors.New("连接未就绪")
 	}
-	return s.vpn.RunDiagnostics()
+	return m.RunDiagnostics()
 }
 
-// forwardEngineEvents 把隧道引擎事件转发到前端与本地处理。
-func (s *ClientService) forwardEngineEvents() {
-	for e := range s.vpn.Events() {
-		s.handleEvent(e)
+// forwardMachineEvents 把 core.Machine 事件转发到前端与本地处理。
+// Machine 是连接状态机的唯一事件源（bus 在 Disconnect 时关闭，goroutine 随之退出）。
+func (s *ClientService) forwardMachineEvents(m *core.Machine) {
+	for e := range m.Events() {
+		s.handleEvent(toTypesEvent(e))
 	}
+}
+
+// toTypesEvent 把 core 事件转换为前端兼容的 types.Event（字段名对齐）。
+// core.ConnStatus 与 types.ConnStatus 底层均为 int 且常量值一致，可直接转换。
+func toTypesEvent(e core.Event) types.Event {
+	var wa *types.WebAuthForm
+	if e.WebAuth != nil {
+		wa = &types.WebAuthForm{
+			Status:       e.WebAuth.Status,
+			Groups:       e.WebAuth.Groups,
+			Hint:         e.WebAuth.Hint,
+			Error:        e.WebAuth.Error,
+			Username:     e.WebAuth.Username,
+			PhoneMasked:  e.WebAuth.PhoneMasked,
+			ChallengeMsg: e.WebAuth.ChallengeMsg,
+		}
+	}
+	te := types.Event{
+		Kind:    e.Kind,
+		Status:  types.ConnStatus(e.Status),
+		URL:     e.URL,
+		Message: e.Message,
+		WebAuth: wa,
+		Policy:  e.Policy,
+		Notice:  e.Notice,
+	}
+	if e.Tunnel != nil {
+		te.Tunnel = e.Tunnel
+	}
+	if e.Stats != nil {
+		te.Stats = e.Stats
+	}
+	if e.Notices != nil {
+		te.Notices = e.Notices
+	}
+	if e.Devices != nil {
+		te.Devices = e.Devices
+	}
+	return te
 }
 
 // handleEvent 统一处理一个事件：① 落盘诊断日志；② 更新本地状态；

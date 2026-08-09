@@ -107,6 +107,16 @@ type Notice struct {
 	Time  int64  `json:"time"` // Unix 秒
 }
 
+// DeviceBinding 设备绑定条目（控制通道 device_list 下推）。
+type DeviceBinding struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
+	Platform   string `json:"platform"`
+	ThisDevice bool   `json:"this_device"`
+	BoundAt    int64  `json:"bound_at"`
+	LastActive int64  `json:"last_active"`
+}
+
 // FormField 单个认证输入字段。
 type FormField struct {
 	Name      string `json:"name"`
@@ -152,6 +162,9 @@ type Event struct {
 	URL     string       `json:"url,omitempty"`    // sso-login: WebAuth 登录地址，由 app 层打开 webview
 	Policy  *PolicyInfo  `json:"policy,omitempty"` // policy: 服务端 config_push
 	Notice  *Notice      `json:"notice,omitempty"` // notice: 通知中心条目
+	Notices []Notice      `json:"notices,omitempty"` // notice 批量（状态快照）
+	Devices []DeviceBinding `json:"devices,omitempty"` // devices: 控制通道下推设备列表
+	Stats   *TunnelStats   `json:"stats,omitempty"`   // stats: 实时流量/通道统计
 }
 
 // HumanBytes 把字节数格式化为人类可读串。

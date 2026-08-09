@@ -65,6 +65,16 @@ export interface Notice {
   time: number; // Unix 秒
 }
 
+// 设备绑定条目（控制通道 device_list 下推）。
+export interface DeviceBinding {
+  device_id: string;
+  device_name: string;
+  platform: string;
+  this_device: boolean;
+  bound_at: number;
+  last_active: number;
+}
+
 // 原生认证表单（引擎消费服务端 WebAuth JSON API 后下发）。
 export interface WebAuthForm {
   status: string; // select_group | credentials | otp | sms_phone | sms | radius | change_pwd
@@ -78,7 +88,7 @@ export interface WebAuthForm {
 
 // 引擎 → UI 事件（对齐 types.Event）。
 export interface AppEvent {
-  kind: string; // status | form | webauth | tunnel | log | error | sso-login | policy | notice
+  kind: string; // status | form | webauth | tunnel | log | error | sso-login | policy | notice | devices
   status?: ConnStatus;
   form?: unknown;
   webauth?: WebAuthForm;
@@ -87,4 +97,5 @@ export interface AppEvent {
   url?: string;
   policy?: PolicyInfo;
   notice?: Notice;
+  devices?: DeviceBinding[]; // device_list 下推的已绑定设备
 }

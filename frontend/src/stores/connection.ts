@@ -6,6 +6,7 @@ import type {
   TunnelStats,
   ConnStatus,
   AppEvent,
+  DeviceBinding,
 } from "../wailsjs/go/ClientService/models";
 
 export const useConnectionStore = defineStore("connection", () => {
@@ -14,6 +15,9 @@ export const useConnectionStore = defineStore("connection", () => {
   const tunnel = ref<TunnelInfo | null>(null);
   const stats = ref<TunnelStats | null>(null);
   const error = ref("");
+  const devices = ref<DeviceBinding[]>([]); // G3：当前账号已绑定设备（设备管理视图）
+  const rxRate = ref(0); // 实时下行速率（字节/秒，由两次采样差计算）
+  const txRate = ref(0); // 实时上行速率
 
   const connectedAt = ref(0);
   const tick = ref(0); // 每秒自增，驱动时长重算
@@ -41,6 +45,7 @@ export const useConnectionStore = defineStore("connection", () => {
       }
     }
     if (e.kind === "tunnel" && e.tunnel) tunnel.value = e.tunnel;
+    if (e.kind === "devices" && e.devices) devices.value = e.devices;
     if (e.kind === "error") error.value = e.message || "连接错误";
   }
 
@@ -72,9 +77,21 @@ export const useConnectionStore = defineStore("connection", () => {
     tick.value++;
     if (!connected.value) {
       stats.value = null;
+      rxRate.value = 0;
+      txRate.value = 0;
       return;
     }
-    stats.value = await ClientService.GetStats();
+    const prev = stats.value;
+    const next = await ClientService.GetStats();
+    stats.value = next;
+    if (prev && next) {
+      // 速率 = 累计字节差 / 采样间隔（pollStats 约每 4 秒一次）
+      const dt = 4;
+      const dr = (next.rx_bytes ?? 0) - (prev.rx_bytes ?? 0);
+      const ur = (next.tx_bytes ?? 0) - (prev.tx_bytes ?? 0);
+      rxRate.value = dr > 0 ? Math.round(dr / dt) : 0;
+      txRate.value = ur > 0 ? Math.round(ur / dt) : 0;
+    }
   }
 
   onEvent(applyEvent);
@@ -84,6 +101,9 @@ export const useConnectionStore = defineStore("connection", () => {
     tunnel,
     stats,
     error,
+    devices,
+    rxRate,
+    txRate,
     connected,
     busy,
     duration,

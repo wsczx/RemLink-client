@@ -51,9 +51,9 @@ func (s *ClientService) handleSsoCallback(w http.ResponseWriter, r *http.Request
 		s.mu.Unlock()
 	}
 
-	// 唤醒阻塞在引擎 Connect 中的 SSO 握手。
-	if s.vpn != nil {
-		_ = s.vpn.SubmitSSOToken(token)
+	// 唤醒阻塞在连接状态机中的 SSO 握手（machine 经 transport 转交引擎 SubmitSSOToken）。
+	if s.machine != nil {
+		s.machine.SubmitSSOToken(token)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

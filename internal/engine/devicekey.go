@@ -99,3 +99,13 @@ func signDeviceChallenge(nonce string) (pubHex, sigHex string, err error) {
 	sig := ed25519.Sign(priv, []byte(nonce))
 	return hex.EncodeToString(pub), hex.EncodeToString(sig), nil
 }
+
+// deviceFingerprint 返回稳定的设备指纹（G3：关联证书绑定链 BindDevice）。
+// 与 machineSeed 同源但不含私钥，是「同一台机器 + 同一用户」的幂等标识，
+// 服务端据此把控制通道信任链（device_register 公钥）与证书绑定链（DeviceId）打通，
+// 并纳入 MaxDevices 计数。
+func deviceFingerprint() string {
+	seed := machineSeed()
+	// 取前半段作为可读指纹，足够区分设备且稳定。
+	return "dv-" + hex.EncodeToString(seed[:16])
+}
